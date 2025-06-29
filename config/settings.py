@@ -85,10 +85,21 @@ class Settings:
         self.obsidian_user_name = os.getenv('OBSIDIAN_USER_NAME', 'Me').strip()
         self.obsidian_company_name = os.getenv('OBSIDIAN_COMPANY_NAME', 'My Company').strip()
         
-        # Docker paths
+        # Storage mode: 'local' or 'google_drive'
+        self.storage_mode = os.getenv('STORAGE_MODE', 'local').lower()
+        
+        # Docker paths (used for local storage mode)
         self.input_dir = os.getenv('INPUT_DIR', '/app/input')
         self.output_dir = os.getenv('OUTPUT_DIR', '/app/output')
         self.processed_dir = os.getenv('PROCESSED_DIR', '/app/processed')
+        
+        # Google Drive configuration
+        self.google_drive_credentials_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', '/app/credentials.json')
+        self.google_drive_token_path = os.getenv('GOOGLE_DRIVE_TOKEN_PATH', '/app/token.json')
+        self.google_drive_input_folder_id = os.getenv('GOOGLE_DRIVE_INPUT_FOLDER_ID', '').strip()
+        self.google_drive_output_folder_id = os.getenv('GOOGLE_DRIVE_OUTPUT_FOLDER_ID', '').strip()
+        self.google_drive_processed_folder_id = os.getenv('GOOGLE_DRIVE_PROCESSED_FOLDER_ID', '').strip()
+        self.google_drive_vault_folder_id = os.getenv('GOOGLE_DRIVE_VAULT_FOLDER_ID', '').strip()
         
         # Entity folders for Obsidian
         self.entity_folders = ['People', 'Companies', 'Technologies', 'Tasks', 'Meta/dashboards']
@@ -181,20 +192,53 @@ class Settings:
         errors = []
         warnings = []
         
-        # Check required paths
-        required_dirs = [
-            ('input_dir', self.input_dir),
-            ('output_dir', self.output_dir),
-            ('processed_dir', self.processed_dir)
-        ]
+        # Validate storage mode
+        if self.storage_mode not in ['local', 'google_drive']:
+            errors.append(f"Invalid STORAGE_MODE: {self.storage_mode}. Must be 'local' or 'google_drive'")
         
-        for name, path in required_dirs:
-            if not Path(path).exists():
+        # Storage-specific validation
+        if self.storage_mode == 'local':
+            # Check required local directories
+            required_dirs = [
+                ('input_dir', self.input_dir),
+                ('output_dir', self.output_dir),
+                ('processed_dir', self.processed_dir)
+            ]
+            
+            for name, path in required_dirs:
+                if not Path(path).exists():
+                    try:
+                        Path(path).mkdir(parents=True, exist_ok=True)
+                        print(f"✅ Created missing directory: {path}")
+                    except Exception as e:
+                        errors.append(f"Cannot create {name} at {path}: {e}")
+        
+        elif self.storage_mode == 'google_drive':
+            # Check Google Drive configuration
+            if not self.google_drive_input_folder_id:
+                errors.append("GOOGLE_DRIVE_INPUT_FOLDER_ID is required when using Google Drive storage")
+            if not self.google_drive_output_folder_id:
+                errors.append("GOOGLE_DRIVE_OUTPUT_FOLDER_ID is required when using Google Drive storage")
+            if not self.google_drive_processed_folder_id:
+                errors.append("GOOGLE_DRIVE_PROCESSED_FOLDER_ID is required when using Google Drive storage")
+            
+            # Check vault configuration for Google Drive mode
+            if self.google_drive_vault_folder_id:
+                # Vault folder ID is provided, so we'll use Google Drive for vault
+                print("✅ Google Drive vault folder configured")
+            
+            # Check credentials file
+            if not Path(self.google_drive_credentials_path).exists():
+                errors.append(f"Google Drive credentials file not found: {self.google_drive_credentials_path}")
+                errors.append("Please download credentials.json from Google Cloud Console")
+            
+            # Create temp directories for Google Drive mode
+            temp_dirs = ['/tmp/meeting_processor']
+            for temp_dir in temp_dirs:
                 try:
-                    Path(path).mkdir(parents=True, exist_ok=True)
-                    print(f"✅ Created missing directory: {path}")
+                    Path(temp_dir).mkdir(parents=True, exist_ok=True)
                 except Exception as e:
-                    errors.append(f"Cannot create {name} at {path}: {e}")
+                    warnings.append(f"Cannot create temp directory {temp_dir}: {e}")
         
         # Check Obsidian vault path
         if not Path(self.obsidian_vault_path).exists():
@@ -262,7 +306,8 @@ class Settings:
     
     def get_config_summary(self) -> dict:
         """Get configuration summary for logging"""
-        return {
+        summary = {
+            'storage_mode': self.storage_mode,
             'vault_path': self.obsidian_vault_path,
             'user_name': self.obsidian_user_name,
             'company_name': self.obsidian_company_name,
@@ -272,6 +317,16 @@ class Settings:
             'dashboard_update_hours': self.dashboard_update_thresholds['hours_between_updates'],
             'morning_refresh_hour': self.dashboard_update_thresholds['morning_refresh_hour']
         }
+        
+        if self.storage_mode == 'google_drive':
+            summary.update({
+                'google_drive_input_folder': self.google_drive_input_folder_id,
+                'google_drive_output_folder': self.google_drive_output_folder_id,
+                'google_drive_processed_folder': self.google_drive_processed_folder_id,
+                'credentials_file_exists': Path(self.google_drive_credentials_path).exists()
+            })
+        
+        return summary
     
     def print_dashboard_settings(self):
         """Print current dashboard update settings"""

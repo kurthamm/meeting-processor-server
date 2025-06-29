@@ -5,16 +5,21 @@ Handles file operations, directory setup, and processing tracking
 
 import shutil
 import time
+import threading
 from pathlib import Path
-from typing import Set
+from typing import Set, Optional, TYPE_CHECKING
 from utils.logger import LoggerMixin, log_success, log_error, log_warning
+
+if TYPE_CHECKING:
+    from core.google_drive_service import GoogleDriveService
 
 
 class FileManager(LoggerMixin):
     """Handles file operations and tracking"""
     
-    def __init__(self, settings):
+    def __init__(self, settings, google_drive_service: Optional['GoogleDriveService'] = None):
         self.settings = settings
+        self.google_drive_service = google_drive_service
         self.input_dir = Path(settings.input_dir)
         self.output_dir = Path(settings.output_dir)
         self.processed_dir = Path(settings.processed_dir)
@@ -23,6 +28,15 @@ class FileManager(LoggerMixin):
         
         self.processed_files_log = self.output_dir / 'processed_files.txt'
         self.processed_files: Set[str] = set()
+        self._processed_files_lock = threading.RLock()  # Reentrant lock for file operations
+        
+        # For Google Drive mode, we use the vault folder ID for direct uploads
+        self.use_google_drive_vault = (
+            settings.storage_mode == 'google_drive' and 
+            hasattr(settings, 'google_drive_vault_folder_id') and
+            settings.google_drive_vault_folder_id and
+            google_drive_service is not None
+        )
         
         self._setup_directories()
         self._load_processed_files()
@@ -52,36 +66,44 @@ class FileManager(LoggerMixin):
         log_success(self.logger, "Directory structure initialized")
     
     def _load_processed_files(self):
-        """Load list of already processed files"""
+        """Load list of already processed files (thread-safe)"""
         try:
             # Clear processed files in testing mode
             if self.settings.testing_mode:
                 self.logger.info("🔄 TESTING MODE: Clearing processed files list")
-                self.processed_files = set()
-                if self.processed_files_log.exists():
-                    self.processed_files_log.unlink()
+                with self._processed_files_lock:
+                    self.processed_files = set()
+                    if self.processed_files_log.exists():
+                        self.processed_files_log.unlink()
                 return
             
-            if self.processed_files_log.exists():
-                with open(self.processed_files_log, 'r') as f:
-                    self.processed_files = set(line.strip() for line in f)
-                self.logger.info(f"📋 Loaded {len(self.processed_files)} processed files")
+            with self._processed_files_lock:
+                if self.processed_files_log.exists():
+                    with open(self.processed_files_log, 'r', encoding='utf-8') as f:
+                        self.processed_files = set(line.strip() for line in f if line.strip())
+                    self.logger.info(f"📋 Loaded {len(self.processed_files)} processed files")
         except Exception as e:
             log_error(self.logger, "Error loading processed files list", e)
     
     def is_file_processed(self, filename: str) -> bool:
-        """Check if file has already been processed"""
-        return filename in self.processed_files
+        """Check if file has already been processed (thread-safe)"""
+        with self._processed_files_lock:
+            return filename in self.processed_files
     
     def mark_file_processed(self, filename: str):
-        """Mark file as processed"""
-        try:
-            self.processed_files.add(filename)
-            with open(self.processed_files_log, 'a') as f:
-                f.write(f"{filename}\n")
-            self.logger.debug(f"✓ Marked as processed: {filename}")
-        except Exception as e:
-            log_error(self.logger, f"Error marking file as processed: {filename}", e)
+        """Mark file as processed (thread-safe)"""
+        with self._processed_files_lock:
+            if filename not in self.processed_files:
+                self.processed_files.add(filename)
+                try:
+                    with open(self.processed_files_log, 'a', encoding='utf-8') as f:
+                        f.write(f"{filename}\n")
+                except Exception as e:
+                    log_error(self.logger, f"Error writing to processed files log: {e}")
+                    # Remove from memory set if we couldn't persist it
+                    self.processed_files.discard(filename)
+                else:
+                    self.logger.debug(f"✓ Marked as processed: {filename}")
     
     def move_processed_file(self, source_path: Path) -> bool:
         """Move processed file to processed directory"""
@@ -108,19 +130,97 @@ class FileManager(LoggerMixin):
             return False
     
     def save_to_obsidian_vault(self, filename: str, content: str) -> bool:
-        """Save content to Obsidian vault"""
+        """Save content to Obsidian vault (local or Google Drive)"""
         try:
-            vault_path = Path(self.obsidian_vault_path) / self.obsidian_folder_path / filename
-            vault_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(vault_path, 'w', encoding='utf-8') as f:
+            if self.use_google_drive_vault:
+                # Save to Google Drive vault
+                return self._save_to_google_drive_vault(filename, content)
+            else:
+                # Save to local vault
+                return self._save_to_local_vault(filename, content)
+                
+        except Exception as e:
+            log_error(self.logger, f"Error saving to vault: {filename}", e)
+            return False
+    
+    def _save_to_local_vault(self, filename: str, content: str) -> bool:
+        """Save content to local Obsidian vault"""
+        vault_path = Path(self.obsidian_vault_path) / self.obsidian_folder_path / filename
+        vault_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(vault_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        log_success(self.logger, f"Saved to local vault: {vault_path}")
+        return True
+    
+    def _save_to_google_drive_vault(self, filename: str, content: str) -> bool:
+        """Save content to Google Drive vault"""
+        # Create temporary file
+        temp_path = self.output_dir / f"temp_{filename}"
+        
+        try:
+            # Write content to temporary file
+            with open(temp_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             
-            log_success(self.logger, f"Saved to vault: {vault_path}")
+            # Determine the folder structure in Google Drive
+            drive_filename = f"{self.obsidian_folder_path}/{filename}".replace('\\', '/')
+            
+            # Upload to Google Drive vault folder
+            file_id = self.google_drive_service.upload_file(
+                temp_path, 
+                drive_filename, 
+                self.settings.google_drive_vault_folder_id
+            )
+            
+            if file_id:
+                log_success(self.logger, f"Saved to Google Drive vault: {drive_filename}")
+                return True
+            else:
+                log_error(self.logger, f"Failed to upload to Google Drive vault: {filename}")
+                return False
+                
+        finally:
+            # Clean up temporary file
+            if temp_path.exists():
+                temp_path.unlink()
+    
+    def create_vault_folder_structure(self) -> bool:
+        """Create folder structure in Google Drive vault if needed"""
+        if not self.use_google_drive_vault:
+            return True
+            
+        try:
+            # Create main folders in Google Drive vault
+            folders_to_create = [
+                self.obsidian_folder_path,
+                *self.settings.entity_folders
+            ]
+            
+            for folder_name in folders_to_create:
+                # Check if folder exists, create if not
+                existing_folders = self.google_drive_service.list_files_in_folder(
+                    self.settings.google_drive_vault_folder_id
+                )
+                
+                folder_exists = any(
+                    f['name'] == folder_name and f.get('mimeType') == 'application/vnd.google-apps.folder'
+                    for f in existing_folders
+                )
+                
+                if not folder_exists:
+                    folder_id = self.google_drive_service.create_folder(
+                        folder_name, 
+                        self.settings.google_drive_vault_folder_id
+                    )
+                    if folder_id:
+                        self.logger.info(f"📁 Created vault folder in Google Drive: {folder_name}")
+            
             return True
             
         except Exception as e:
-            log_error(self.logger, f"Error saving to vault: {filename}", e)
+            log_error(self.logger, "Error creating vault folder structure", e)
             return False
     
     def get_output_path(self, filename: str) -> Path:

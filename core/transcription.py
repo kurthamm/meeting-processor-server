@@ -7,6 +7,12 @@ import signal
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 from utils.logger import LoggerMixin, log_success, log_error, log_warning
+from utils.retry_handler import (
+    api_retry, 
+    handle_api_errors, 
+    OPENAI_RETRYABLE_EXCEPTIONS,
+    APIRetryableError
+)
 
 if TYPE_CHECKING:
     import openai
@@ -74,7 +80,20 @@ class TranscriptionService(LoggerMixin):
         return combined_transcript
     
     def _transcribe_single_file(self, audio_path: Path, file_size_mb: float) -> Optional[str]:
-        """Transcribe a single file"""
+        """Transcribe a single file with retry logic"""
+        try:
+            return self._call_whisper_api(audio_path)
+        except Exception as e:
+            log_error(self.logger, f"Failed to transcribe {audio_path.name}: {e}")
+            return None
+    
+    @handle_api_errors
+    @api_retry.retry(
+        retryable_exceptions=OPENAI_RETRYABLE_EXCEPTIONS,
+        context="OpenAI Whisper transcription"
+    )
+    def _call_whisper_api(self, audio_path: Path) -> str:
+        """Make the actual API call to OpenAI Whisper with error handling"""
         try:
             with open(audio_path, 'rb') as audio_file:
                 transcript = self.openai_client.audio.transcriptions.create(
@@ -90,10 +109,15 @@ class TranscriptionService(LoggerMixin):
                        f"Transcribed {audio_path.name}: {len(result_text)} characters")
             
             return result_text
-            
+        
         except Exception as e:
-            log_error(self.logger, f"Error transcribing {audio_path.name}", e)
-            return None
+            # Convert to retryable error if appropriate
+            error_msg = str(e).lower()
+            if any(term in error_msg for term in ['rate limit', 'timeout', 'connection', 'server error']):
+                raise APIRetryableError(f"OpenAI API error: {e}")
+            else:
+                # Non-retryable error
+                raise
     
     def _transcribe_chunk(self, chunk_path: Path, chunk_number: int) -> str:
         """Transcribe a single chunk with timeout handling"""

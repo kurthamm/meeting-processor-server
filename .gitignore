@@ -60,4 +60,4 @@ obsidian-vault-plugins/*/styles.css
 obsidian-vault-plugins/calendar/
 obsidian-vault-plugins/metaedit/
 obsidian-vault-plugins/obsidian-local-rest-api/
-obsidian-vault-plugins/tag-wrangler/
+obsidian-vault-plugins/tag-wrangler/client_secret_*.json

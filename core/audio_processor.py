@@ -3,10 +3,12 @@ Audio processing for Meeting Processor
 Handles MP4 to FLAC conversion and audio chunking for large files
 """
 
+import os
 import subprocess
 from pathlib import Path
 from typing import List, Optional
 from utils.logger import LoggerMixin, log_success, log_error, log_warning
+from utils.exceptions import AudioProcessingError, ResourceError
 
 
 class AudioProcessor(LoggerMixin):
@@ -17,8 +19,29 @@ class AudioProcessor(LoggerMixin):
         self.max_file_size_mb = 25  # Whisper API limit
     
     def convert_mp4_to_flac(self, mp4_path: Path) -> Optional[Path]:
-        """Convert MP4 to FLAC using ffmpeg with compression for Whisper"""
+        """Convert MP4 to FLAC using ffmpeg with enhanced error handling"""
         try:
+            # Validate input file
+            if not mp4_path.exists():
+                raise AudioProcessingError(
+                    f"Input file not found: {mp4_path.name}",
+                    filename=mp4_path.name
+                )
+            
+            # Check disk space
+            if not self._check_disk_space(mp4_path):
+                raise ResourceError(
+                    f"Insufficient disk space for conversion: {mp4_path.name}",
+                    resource_type="disk"
+                )
+            
+            # Validate input file
+            if not self._validate_input_file(mp4_path):
+                raise AudioProcessingError(
+                    f"Invalid or corrupted input file: {mp4_path.name}",
+                    filename=mp4_path.name
+                )
+            
             flac_filename = mp4_path.stem + '.flac'
             flac_path = self.output_dir / flac_filename
             
@@ -35,9 +58,27 @@ class AudioProcessor(LoggerMixin):
                 str(flac_path)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            try:
+                result = subprocess.run(
+                    cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=300  # 5 minute timeout
+                )
+            except subprocess.TimeoutExpired:
+                raise AudioProcessingError(
+                    f"Conversion timeout exceeded for {mp4_path.name} (5 minutes)",
+                    filename=mp4_path.name
+                )
             
             if result.returncode == 0:
+                # Validate output file
+                if not self._validate_output_file(flac_path):
+                    raise AudioProcessingError(
+                        f"Output validation failed: {flac_path.name}",
+                        filename=mp4_path.name
+                    )
+                
                 file_size_mb = flac_path.stat().st_size / (1024 * 1024)
                 log_success(self.logger, f"Converted {mp4_path.name} to FLAC ({file_size_mb:.1f}MB)")
                 
@@ -46,13 +87,99 @@ class AudioProcessor(LoggerMixin):
                 
                 return flac_path
             else:
-                log_error(self.logger, f"FFmpeg conversion failed for {mp4_path.name}")
-                self.logger.debug(f"FFmpeg stderr: {result.stderr}")
-                return None
+                # Parse FFmpeg error for better messaging
+                error_msg = self._parse_ffmpeg_error(result.stderr)
+                raise AudioProcessingError(
+                    f"FFmpeg conversion failed: {error_msg}",
+                    filename=mp4_path.name,
+                    ffmpeg_output=result.stderr
+                )
                 
+        except AudioProcessingError:
+            raise  # Re-raise our custom errors
+        except ResourceError:
+            raise  # Re-raise resource errors
         except Exception as e:
-            log_error(self.logger, f"Error converting {mp4_path.name}", e)
-            return None
+            raise AudioProcessingError(
+                f"Unexpected error converting {mp4_path.name}: {str(e)}",
+                filename=mp4_path.name
+            )
+    
+    def _check_disk_space(self, input_file: Path, safety_margin: float = 2.0) -> bool:
+        """Check if sufficient disk space is available"""
+        try:
+            input_size = input_file.stat().st_size
+            required_space = input_size * safety_margin  # Assume 2x space needed
+            
+            statvfs = os.statvfs(self.output_dir)
+            available_space = statvfs.f_frsize * statvfs.f_bavail
+            
+            return available_space > required_space
+        except Exception as e:
+            self.logger.warning(f"Could not check disk space: {e}")
+            return True  # Assume space is available if check fails
+    
+    def _validate_input_file(self, file_path: Path) -> bool:
+        """Validate input file is readable and appears to be valid media"""
+        try:
+            # Check file is readable
+            with open(file_path, 'rb') as f:
+                f.read(1024)  # Try to read first 1KB
+            
+            # Quick ffprobe check to validate it's a valid media file
+            result = subprocess.run(
+                ['ffprobe', '-v', 'quiet', str(file_path)],
+                capture_output=True,
+                timeout=30
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+    
+    def _validate_output_file(self, file_path: Path) -> bool:
+        """Validate output file was created successfully"""
+        try:
+            if not file_path.exists():
+                return False
+            
+            # Check file size is reasonable (not empty)
+            if file_path.stat().st_size < 1024:  # Less than 1KB is suspicious
+                return False
+            
+            # Quick probe to ensure it's a valid audio file
+            result = subprocess.run(
+                ['ffprobe', '-v', 'quiet', str(file_path)],
+                capture_output=True,
+                timeout=10
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+    
+    def _parse_ffmpeg_error(self, stderr: str) -> str:
+        """Parse ffmpeg error output for user-friendly messages"""
+        if not stderr:
+            return "Unknown ffmpeg error"
+        
+        stderr_lower = stderr.lower()
+        
+        if "no such file or directory" in stderr_lower:
+            return "Input file not found or inaccessible"
+        elif "permission denied" in stderr_lower:
+            return "Permission denied accessing file"
+        elif "no space left on device" in stderr_lower:
+            return "Insufficient disk space"
+        elif "invalid data" in stderr_lower or "could not find codec" in stderr_lower:
+            return "File appears to be corrupted or not a valid media file"
+        elif "connection refused" in stderr_lower or "network" in stderr_lower:
+            return "Network error while accessing file"
+        else:
+            # Return the most relevant error line
+            lines = stderr.strip().split('\n')
+            for line in reversed(lines):
+                if line.strip() and not line.startswith('['):
+                    return line.strip()
+            return "Unknown conversion error"
     
     def chunk_audio_file(self, audio_path: Path, chunk_duration_minutes: int = 10) -> List[Path]:
         """Split large audio file into smaller chunks for Whisper processing"""

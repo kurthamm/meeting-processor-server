@@ -13,15 +13,29 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OBSIDIAN_VAULT_PATH=${OBSIDIAN_VAULT_PATH}
       - OBSIDIAN_FOLDER_PATH=${OBSIDIAN_FOLDER_PATH}
+      - STORAGE_MODE=${STORAGE_MODE:-local}
+      # Local storage settings (used when STORAGE_MODE=local)
       - INPUT_DIR=/app/input
       - OUTPUT_DIR=/app/output
       - PROCESSED_DIR=/app/processed
+      # Google Drive settings (used when STORAGE_MODE=google_drive)
+      - GOOGLE_DRIVE_CREDENTIALS_PATH=${GOOGLE_DRIVE_CREDENTIALS_PATH:-/app/credentials.json}
+      - GOOGLE_DRIVE_TOKEN_PATH=${GOOGLE_DRIVE_TOKEN_PATH:-/app/token.json}
+      - GOOGLE_DRIVE_INPUT_FOLDER_ID=${GOOGLE_DRIVE_INPUT_FOLDER_ID}
+      - GOOGLE_DRIVE_OUTPUT_FOLDER_ID=${GOOGLE_DRIVE_OUTPUT_FOLDER_ID}
+      - GOOGLE_DRIVE_PROCESSED_FOLDER_ID=${GOOGLE_DRIVE_PROCESSED_FOLDER_ID}
+      - GOOGLE_DRIVE_VAULT_FOLDER_ID=${GOOGLE_DRIVE_VAULT_FOLDER_ID}
     volumes:
+      # Local storage volumes (only needed when STORAGE_MODE=local)
       - "C:/meeting-processor/input:/app/input:rw"
       - "C:/meeting-processor/output:/app/output:rw"
       - "C:/meeting-processor/processed:/app/processed:rw"
       - "C:/meeting-processor/logs:/app/logs:rw"
       - "C:/Obsidian_Vaults/My_Vault:/app/obsidian_vault:rw"
+      # Google Drive credentials (needed when STORAGE_MODE=google_drive)
+      # Mount your credentials.json file here when using Google Drive
+      # - "/path/to/your/credentials.json:/app/credentials.json:ro"
+      # - "/path/to/store/token.json:/app/token.json:rw"
     restart: unless-stopped
     logging:
       driver: "json-file"

@@ -310,6 +310,50 @@ Format as JSON."""
             'summary': 'Technology referenced in meeting.'
         }
     
+    def analyze_person_context(self, person_name: str, meeting_filename: str) -> Dict[str, any]:
+        """Analyze person context for template generation"""
+        context = self.get_person_context(person_name, meeting_filename)
+        
+        return {
+            'role': context.get('role', 'Team Member'),
+            'department': context.get('department', 'Unknown'),
+            'company': context.get('company', 'Unknown'),
+            'expertise': context.get('skills', '').split(',') if context.get('skills') else [],
+            'communication_style': context.get('communication_style', 'Professional'),
+            'key_responsibilities': context.get('responsibilities', '').split(',') if context.get('responsibilities') else [],
+            'relationships': [],
+            'insights': context.get('summary', '')
+        }
+    
+    def analyze_company_context(self, company_name: str, meeting_filename: str) -> Dict[str, any]:
+        """Analyze company context for template generation"""
+        context = self.get_company_context(company_name, meeting_filename)
+        
+        return {
+            'industry': context.get('industry', 'Unknown'),
+            'type': context.get('relationship_to_employer', 'Partner'),
+            'size': context.get('size', 'Unknown'),
+            'technologies': context.get('technologies_used', []),
+            'services': context.get('business_needs', '').split(',') if context.get('business_needs') else [],
+            'key_people': context.get('key_contacts', '').split(',') if context.get('key_contacts') else [],
+            'relationship_status': context.get('relationship', 'Active'),
+            'insights': context.get('summary', '')
+        }
+    
+    def analyze_technology_context(self, tech_name: str, meeting_filename: str) -> Dict[str, any]:
+        """Analyze technology context for template generation"""
+        context = self.get_technology_context(tech_name, meeting_filename)
+        
+        return {
+            'category': context.get('category', 'Tool'),
+            'status': context.get('current_status', 'In Use'),
+            'use_cases': context.get('use_cases', []),
+            'benefits': context.get('business_value', '').split(',') if context.get('business_value') else [],
+            'challenges': context.get('challenges', '').split(',') if context.get('challenges') else [],
+            'alternatives': [],
+            'insights': context.get('summary', '')
+        }
+
     def _get_default_context(self, entity_type: str) -> Dict[str, str]:
         """Default context for unknown entity types"""
         return {

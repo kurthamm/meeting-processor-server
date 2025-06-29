@@ -7,6 +7,12 @@ import re
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from utils.logger import LoggerMixin, log_success, log_error, log_warning
+from utils.retry_handler import (
+    api_retry, 
+    handle_api_errors, 
+    ANTHROPIC_RETRYABLE_EXCEPTIONS,
+    APIRetryableError
+)
 
 
 class ClaudeAnalyzer(LoggerMixin):
@@ -17,6 +23,31 @@ class ClaudeAnalyzer(LoggerMixin):
         self.model = "claude-3-5-sonnet-20241022"
         self.max_analysis_tokens = 4000
         self.max_speaker_tokens = 8000
+    
+    @handle_api_errors
+    @api_retry.retry(
+        retryable_exceptions=ANTHROPIC_RETRYABLE_EXCEPTIONS,
+        context="Anthropic Claude API"
+    )
+    def _call_claude_api(self, prompt: str, max_tokens: int = 4000) -> str:
+        """Make a Claude API call with retry logic and error handling"""
+        try:
+            response = self.anthropic_client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            return response.content[0].text.strip()
+        
+        except Exception as e:
+            # Convert to retryable error if appropriate
+            error_msg = str(e).lower()
+            if any(term in error_msg for term in ['rate limit', 'timeout', 'connection', 'server error', 'overloaded']):
+                raise APIRetryableError(f"Anthropic API error: {e}")
+            else:
+                # Non-retryable error
+                raise
     
     def extract_meeting_topic(self, transcript: str) -> str:
         """Extract meeting topic using Claude AI for filename generation"""
@@ -43,13 +74,7 @@ Transcript excerpt (first 1000 characters):
 
 Please respond with just the topic in the format specified above, nothing else."""
 
-            response = self.anthropic_client.messages.create(
-                model=self.model,
-                max_tokens=100,
-                messages=[{"role": "user", "content": topic_prompt}]
-            )
-            
-            topic = response.content[0].text.strip()
+            topic = self._call_claude_api(topic_prompt, max_tokens=100)
             
             # Clean up the topic to ensure it's filename-safe
             topic = re.sub(r'[^\w\-]', '', topic)
@@ -91,13 +116,7 @@ Format the response as a well-structured document that can be easily reviewed an
 
 IMPORTANT: Ensure the analysis captures ALL content from the transcript without summarization or omission of details."""
 
-            response = self.anthropic_client.messages.create(
-                model=self.model,
-                max_tokens=self.max_analysis_tokens,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            analysis = response.content[0].text
+            analysis = self._call_claude_api(prompt, max_tokens=self.max_analysis_tokens)
             
             result = {
                 "timestamp": datetime.now().isoformat(),
@@ -151,13 +170,7 @@ Original transcript:
 
 Please return the COMPLETE transcript with only speaker labels added, maintaining every single word from the original."""
 
-            response = self.anthropic_client.messages.create(
-                model=self.model,
-                max_tokens=self.max_speaker_tokens,
-                messages=[{"role": "user", "content": speaker_prompt}]
-            )
-            
-            formatted_transcript = response.content[0].text
+            formatted_transcript = self._call_claude_api(speaker_prompt, max_tokens=self.max_speaker_tokens)
             
             # Verify that the formatted transcript is not significantly shorter than original
             if len(formatted_transcript) < len(transcript) * 0.85:
@@ -244,13 +257,7 @@ Original chunk:
 RETURN ONLY THE TRANSCRIPT WITH SPEAKER LABELS - NO OTHER TEXT:"""
 
         try:
-            response = self.anthropic_client.messages.create(
-                model=self.model,
-                max_tokens=self.max_speaker_tokens,
-                messages=[{"role": "user", "content": chunk_prompt}]
-            )
-            
-            formatted_chunk = response.content[0].text.strip()
+            formatted_chunk = self._call_claude_api(chunk_prompt, max_tokens=self.max_speaker_tokens)
             
             # Verify chunk wasn't significantly altered
             if len(formatted_chunk) < len(chunk) * 0.75:
