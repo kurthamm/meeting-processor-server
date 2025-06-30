@@ -12,6 +12,22 @@ from dataclasses import dataclass, field
 from utils.logger import LoggerMixin
 
 
+def ensure_string(value, fallback=""):
+    """Ensure value is a string, with intelligent dict handling"""
+    if isinstance(value, str):
+        return value
+    elif isinstance(value, dict):
+        # Try common text keys
+        for key in ['text', 'content', 'message', 'value']:
+            if key in value:
+                return str(value[key])
+        return str(value)  # Last resort
+    elif value is None:
+        return fallback
+    else:
+        return str(value)
+
+
 @dataclass
 class MeetingMetadata:
     """Extracted metadata from meeting content"""

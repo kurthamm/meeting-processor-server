@@ -240,10 +240,13 @@ class Settings:
                 except Exception as e:
                     warnings.append(f"Cannot create temp directory {temp_dir}: {e}")
         
-        # Check Obsidian vault path
-        if not Path(self.obsidian_vault_path).exists():
+        # Check Obsidian vault path (only for local storage mode)
+        if self.storage_mode == 'local' and not Path(self.obsidian_vault_path).exists():
             errors.append(f"Obsidian vault path does not exist: {self.obsidian_vault_path}")
             errors.append("Please ensure your Obsidian vault is mounted correctly in docker-compose.yml")
+        elif self.storage_mode == 'google_drive' and not self.google_drive_vault_folder_id:
+            errors.append("Google Drive vault folder ID not configured for Google Drive storage mode")
+            errors.append("Please set GOOGLE_DRIVE_VAULT_FOLDER_ID in your environment")
         
         # Check API keys
         if not self.openai_api_key and not self.testing_mode:

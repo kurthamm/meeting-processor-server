@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Set
 from datetime import datetime, timedelta
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
@@ -47,32 +45,22 @@ class GoogleDriveService(LoggerMixin):
         self._authenticate()
     
     def _authenticate(self):
-        """Authenticate and create Google Drive service"""
-        creds = None
+        """Authenticate using service account credentials"""
+        if not os.path.exists(self.credentials_path):
+            raise FileNotFoundError(
+                f"Google Drive service account file not found at {self.credentials_path}. "
+                "Please provide a service account JSON key file."
+            )
         
-        # Load existing token
-        if os.path.exists(self.token_path):
-            creds = Credentials.from_authorized_user_file(self.token_path, self.SCOPES)
-        
-        # If there are no valid credentials, authenticate
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                if not os.path.exists(self.credentials_path):
-                    raise FileNotFoundError(
-                        f"Google Drive credentials file not found at {self.credentials_path}. "
-                        "Please download credentials.json from Google Cloud Console."
-                    )
-                
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_path, self.SCOPES
-                )
-                creds = flow.run_local_server(port=0)
-            
-            # Save credentials for next run
-            with open(self.token_path, 'w') as token:
-                token.write(creds.to_json())
+        try:
+            # Use service account authentication
+            creds = ServiceAccountCredentials.from_service_account_file(
+                self.credentials_path, scopes=self.SCOPES
+            )
+            self.logger.info("✅ Using service account authentication")
+        except Exception as e:
+            self.logger.error(f"Service account authentication failed: {e}")
+            raise
         
         self.service = build('drive', 'v3', credentials=creds)
         self.logger.info("✅ Google Drive service authenticated")

@@ -38,7 +38,26 @@ class ClaudeAnalyzer(LoggerMixin):
                 messages=[{"role": "user", "content": prompt}]
             )
             
-            return response.content[0].text.strip()
+            # Safely extract text from Anthropic response
+            try:
+                if hasattr(response, 'content') and response.content:
+                    content = response.content[0] if isinstance(response.content, list) else response.content
+                    if hasattr(content, 'text'):
+                        result = content.text
+                    elif isinstance(content, dict):
+                        result = content.get('text', str(content))
+                    else:
+                        result = str(content)
+                else:
+                    result = str(response)
+                
+                # Ensure it's a string and strip
+                if not isinstance(result, str):
+                    result = str(result)
+                return result.strip()
+            except Exception as e:
+                self.logger.warning(f"Error extracting text from Claude response: {e}")
+                return ""
         
         except Exception as e:
             # Convert to retryable error if appropriate

@@ -53,15 +53,19 @@ class FileManager(LoggerMixin):
             directory.mkdir(parents=True, exist_ok=True)
             self.logger.debug(f"📁 Ensured directory exists: {directory}")
         
-        # Create Obsidian vault structure
-        obsidian_meetings_path = Path(self.obsidian_vault_path) / self.obsidian_folder_path
-        obsidian_meetings_path.mkdir(parents=True, exist_ok=True)
-        
-        # Create entity folders
-        for folder in self.settings.entity_folders:
-            entity_path = Path(self.obsidian_vault_path) / folder
-            entity_path.mkdir(parents=True, exist_ok=True)
-            self.logger.debug(f"📁 Created entity folder: {folder}")
+        # Create Obsidian vault structure (only for local storage mode)
+        if not self.use_google_drive_vault:
+            obsidian_meetings_path = Path(self.obsidian_vault_path) / self.obsidian_folder_path
+            obsidian_meetings_path.mkdir(parents=True, exist_ok=True)
+            
+            # Create entity folders
+            for folder in self.settings.entity_folders:
+                entity_path = Path(self.obsidian_vault_path) / folder
+                entity_path.mkdir(parents=True, exist_ok=True)
+                self.logger.debug(f"📁 Created entity folder: {folder}")
+        else:
+            # For Google Drive mode, vault structure is managed by VaultInitializer
+            self.logger.info("📁 Using Google Drive vault - skipping local directory creation")
         
         log_success(self.logger, "Directory structure initialized")
     

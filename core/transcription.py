@@ -103,7 +103,17 @@ class TranscriptionService(LoggerMixin):
                     timeout=self.timeout_seconds
                 )
             
-            result_text = transcript.text if hasattr(transcript, 'text') else str(transcript)
+            # Safely extract text from OpenAI response
+            if hasattr(transcript, 'text'):
+                result_text = transcript.text
+            elif isinstance(transcript, dict):
+                result_text = transcript.get('text', str(transcript))
+            else:
+                result_text = str(transcript)
+            
+            # Ensure it's actually a string
+            if not isinstance(result_text, str):
+                result_text = str(result_text)
             
             log_success(self.logger, 
                        f"Transcribed {audio_path.name}: {len(result_text)} characters")

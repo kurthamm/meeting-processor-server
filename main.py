@@ -182,7 +182,13 @@ class MeetingProcessor:
             if mp4_path.exists():
                 file_size_mb = mp4_path.stat().st_size / (1024 * 1024)
             elif drive_file_info and 'size' in drive_file_info:
-                file_size_mb = int(drive_file_info['size']) / (1024 * 1024)
+                try:
+                    # Safely convert Google Drive file size (which comes as string) to float
+                    file_size_bytes = float(str(drive_file_info['size']))
+                    file_size_mb = file_size_bytes / (1024 * 1024)
+                except (ValueError, TypeError) as e:
+                    self.logger.warning(f"Could not parse file size from Google Drive: {e}")
+                    file_size_mb = 50  # Default fallback size in MB
             
             # Start progress tracking
             progress = self.progress_tracker.start_processing(name, file_size_mb)
